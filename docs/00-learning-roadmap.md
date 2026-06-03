@@ -92,83 +92,79 @@ godis/
 
 ## 学习路线设计思路
 
-项目整体架构自底向上分为 5 层：
+遵循 README 建议的阅读顺序，从数据流入服务器的入口（TCP）开始，逐步深入到存储引擎、集群：
 
 ```
-┌─────────────────────────────────┐
-│        集群层 (cluster/)         │  最高级 — 分布式
-├─────────────────────────────────┤
-│     持久化 (aof/) + 发布订阅     │  可选功能
-├─────────────────────────────────┤
-│     存储引擎 (database/)        │  核心 — 命令处理 + 并发控制
-├─────────────────────────────────┤
-│     数据结构 (datastruct/)      │  基础 — dict/list/sortedset
-├─────────────────────────────────┤
-│  网络层 (tcp/ + redis/) + lib/  │  地基 — 协议 + 工具
-└─────────────────────────────────┘
+客户端请求 ─→ TCP 服务器 ─→ Redis 协议解析 ─→ 存储引擎 ─→ 数据结构
+                                                              │
+                                                         持久化/复制
+                                                              │
+                                                          集群层
 ```
 
-建议按自底向上的顺序学习，每完成一个阶段都能形成可运行的知识闭环。
+lib/ 工具库穿插在相关阶段中学习，用到的时再讲。
 
 ---
 
-## 第一阶段：基础设施层 (lib/)
-
-> 项目地基，不依赖其他模块，可任意顺序开始。建议按序号顺序，由浅入深。
-> 预计 1-2 天
-
-| 序号 | 模块 | 文件 | 行数 | 学习目标 | Go 知识点 |
-|------|------|------|------|----------|-----------|
-| 1.1 | `lib/sync/wait` | `wait.go` | 44 | goroutine + channel 超时模式，优雅关闭基础 | `sync.WaitGroup`, buffered channel, `select` |
-| 1.2 | `lib/sync/atomic` | `bool.go` | 21 | 原子操作实现无锁并发 | `sync/atomic`, 类型底层转换 |
-| 1.3 | `lib/logger` | `logger.go`, `files.go` | ~120 | 异步日志、channel 解耦、日志轮转 | goroutine 消费者模式, `os.File` |
-| 1.4 | `lib/utils` | `utils.go`, `rand_string.go` | ~40 | 通用工具 | 标准库工具方法 |
-| 1.5 | `lib/timewheel` | `timewheel.go`, `delay.go` | ~180 | 时间轮算法，高效批量 key 过期 | 环形数组, 延迟任务调度 |
-| 1.6 | `lib/consistenthash` | `consistenthash.go` | ~120 | 一致性哈希，集群 slot 映射基础 | 虚拟节点, 哈希环 |
-| 1.7 | `lib/wildcard` | `wildcard.go` | ~60 | 通配符匹配 (KEYS 命令底层) | 模式匹配算法 |
-| 1.8 | `lib/geohash` | `geohash.go`, `neighbor.go` | ~200 | GeoHash 编码 (GEO 命令底层) | 位运算, 空间索引 |
-| 1.9 | `lib/pool` | `pool.go` | ~100 | 连接池/对象池 | `sync.Pool`, 资源复用 |
-| 1.10 | `lib/idgenerator` | `snowflake.go` | ~80 | Snowflake 唯一 ID 生成 | 位运算, 分布式 ID |
-
----
-
-## 第二阶段：接口定义层 (interface/)
+## 第一阶段：接口定义 (interface/)
 
 > 模块解耦的关键。代码量极少 (~100 行) 但定义了整个项目的契约。
+> 先看接口再看实现，学习时更有方向感。
 > 预计 < 1 天
 
 | 序号 | 模块 | 文件 | 学习目标 |
 |------|------|------|----------|
-| 2.1 | `interface/tcp` | `handler.go` | `Handler` 接口 — TCP 层和上层解耦 |
-| 2.2 | `interface/redis` | `reply.go`, `conn.go` | `Connection` / `Reply` 接口 — 协议层抽象 |
-| 2.3 | `interface/database` | `db.go` | `DBEngine` 接口 — 存储引擎和集群层的统一契约 |
+| 1.1 | `interface/tcp` | `handler.go` | `Handler` 接口 — TCP 层和上层解耦 |
+| 1.2 | `interface/redis` | `reply.go`, `conn.go` | `Connection` / `Reply` 接口 — 协议层抽象 |
+| 1.3 | `interface/database` | `db.go` | `DBEngine` 接口 — 存储引擎和集群层的统一契约 |
 
 **重点理解**: `DBEngine` 接口使得 `database.DB` 和 `cluster.Cluster` 可以对上层透明切换，这是 main.go 中单机/集群模式切换的基础。
 
 ---
 
-## 第三阶段：网络协议层 (tcp/ + redis/)
+## 第二阶段：TCP 服务器 (tcp/)
 
-> 数据从客户端流入服务器的完整链路。
+> 客户端连接进入的第一道关卡。理解网络层如何接收连接、分发请求、优雅关闭。
+> 涉及 lib/: `lib/sync/wait`（优雅关闭）、`lib/logger`（日志）
+> 预计 1 天
+
+| 序号 | 模块 | 文件 | 行数 | 学习目标 |
+|------|------|------|------|----------|
+| 2.1 | TCP 服务器 | `tcp/server.go` | ~120 | Accept 循环、每连接 goroutine、信号监听、优雅关闭 |
+| 2.2 | Echo Handler | `tcp/echo.go` | ~90 | Handler 接口的示例实现 |
+
+**涉及的 lib/ 模块**（按需学习）:
+
+| 模块 | 文件 | 行数 | 学习目标 | Go 知识点 |
+|------|------|------|----------|-----------|
+| `lib/sync/wait` | `wait.go` | 44 | 带超时的 WaitGroup，优雅关闭基础 | `sync.WaitGroup`, buffered channel |
+| `lib/sync/atomic` | `bool.go` | 21 | 原子操作实现无锁并发 | `sync/atomic` |
+| `lib/logger` | `logger.go`, `files.go` | ~120 | 异步日志、channel 解耦 | goroutine 消费者模式 |
+
+---
+
+## 第三阶段：Redis 协议层 (redis/)
+
+> 字节流 ↔ Redis 命令/回复的完整编解码链路。
 > 预计 2-3 天
 
 | 序号 | 模块 | 文件 | 行数 | 学习目标 |
 |------|------|------|------|----------|
-| 3.1 | `tcp` | `server.go`, `echo.go` | ~160 | TCP 服务器：Accept 循环、每连接 goroutine、优雅关闭 (结合 1.1 的 Wait) |
-| 3.2 | `redis/parser` | `parser.go`, `parserv2.go` | ~450 | **RESP 协议解析**：字节流 → 结构化命令，状态机解析 |
-| 3.3 | `redis/protocol` | `reply.go`, `consts.go`, `errors.go` | ~150 | RESP 回复构造 (OkReply/ErrReply/BulkReply/IntReply...) |
-| 3.4 | `redis/connection` | `conn.go`, `fake.go` | ~150 | 连接状态管理、`sync.Pool` 复用 Buffer、事务队列 |
-| 3.5 | `redis/client` | `client.go` | ~250 | Redis 客户端实现 — 理解完整请求-响应循环的另一面，集群内部通信基础 |
-| 3.6 | `redis/server/std` | `server.go` | ~350 | **组合层**：TCP Server + 协议解析 + 数据库引擎 → 完整 Redis 服务器 |
-| 3.7 | `redis/server/gnet` | `server.go` | ~250 | gnet 高性能网络模型实现 (可选，对比 std 理解) |
+| 3.1 | RESP 回复构造 | `redis/protocol/reply.go`, `consts.go`, `errors.go` | ~150 | RESP 协议回复类型 (Ok/Err/Bulk/Int/ Multi...) |
+| 3.2 | **RESP 协议解析** | `redis/parser/parser.go`, `parserv2.go` | ~450 | 字节流 → 结构化命令，状态机解析 |
+| 3.3 | 连接管理 | `redis/connection/conn.go`, `fake.go` | ~150 | 连接状态、`sync.Pool` 复用 Buffer、事务队列 |
+| 3.4 | Redis 客户端 | `redis/client/client.go` | ~250 | 完整请求-响应循环的另一面，集群内部通信基础 |
+| 3.5 | **标准 Redis 服务器** | `redis/server/std/server.go` | ~350 | **组合层**：TCP + 协议 + 数据库引擎 → 完整 Redis 服务器 |
+| 3.6 | gnet 服务器 | `redis/server/gnet/server.go` | ~250 | gnet 高性能网络模型 (可选，对比 std 理解) |
 
-**实战建议**: 完成 3.6 后，用 `redis-cli -p 6399` 连接 godis，发送 `PING` / `SET foo bar`，在 `std/server.go` 的 `HandleFunc` 打断点，走一遍完整链路。
+**实战建议**: 完成 3.5 后，用 `redis-cli -p 6399` 连接 godis，发送 `PING` / `SET foo bar`，在 `std/server.go` 的 `HandleFunc` 打断点，走一遍完整链路。
 
 ---
 
 ## 第四阶段：数据结构层 (datastruct/) ⚠️ 核心
 
 > Redis 之所以快，核心在于数据结构的设计。
+> 涉及 lib/: `lib/timewheel`（key 过期调度）、`lib/wildcard`（KEYS 通配符）、`lib/geohash`（GEO 命令）
 > 预计 3-4 天
 
 | 序号 | 模块 | 文件 | 行数 | 学习目标 | 重要性 |
@@ -180,9 +176,17 @@ godis/
 | 4.5 | `datastruct/sortedset` | `sortedset.go`, `skiplist.go`, `border.go` | ~500 | **跳表 (Skip List)** — 有序集合核心，最重要的数据结构 | ⭐⭐⭐ |
 | 4.6 | `datastruct/bitmap` | `bitmap.go` | ~250 | 位图位操作 | ⭐⭐ |
 
+**涉及的 lib/ 模块**（按需学习）:
+
+| 模块 | 文件 | 行数 | 学习目标 | 在哪里用到 |
+|------|------|------|----------|-----------|
+| `lib/timewheel` | `timewheel.go`, `delay.go` | ~180 | 时间轮算法，高效批量 key 过期 | `database/database.go` 中 TTL 调度 |
+| `lib/wildcard` | `wildcard.go` | ~60 | 通配符匹配 | `database/keys.go` 中 KEYS 命令 |
+| `lib/geohash` | `geohash.go`, `neighbor.go` | ~200 | GeoHash 编码 | `database/geo.go` 中 GEO 命令 |
+
 **学习建议**:
 - **dict** 和 **sortedset** 是重中之重，值得反复阅读
-- 4.1 和 4.2 可以结合第五阶段的 `database.go` 一起理解——它们共同构成了"并行内核"
+- 4.1 和 4.2 结合第五阶段的 `database.go` 一起理解——它们共同构成了"并行内核"
 - sortedset 的跳表实现建议画图理解节点层级和查找路径
 
 ---
@@ -203,7 +207,7 @@ godis/
 | 5.7 | Hash | `hash.go` | ~150 | HSET/HGET/HDEL/HGETALL/HLEN 等 |
 | 5.8 | Set | `set.go` | ~150 | SADD/SREM/SINTER/SUNION/SCARD 等 |
 | 5.9 | SortedSet | `sortedset.go` | ~300 | ZADD/ZRANGE/ZRANK/ZSCORE/ZPOPMIN 等 |
-| 5.10 | Geo | `geo.go` | ~200 | GEOADD/GEODIST/GEORADIUS (结合 1.8 GeoHash) |
+| 5.10 | Geo | `geo.go` | ~200 | GEOADD/GEODIST/GEORADIUS (结合 `lib/geohash`) |
 | 5.11 | 事务 | `transaction.go`, `tx_utils.go` | ~230 | MULTI/EXEC/WATCH 乐观锁、undo log 回滚 |
 | 5.12 | 系统命令 | `systemcmd.go`, `slowlog.go` | ~200 | AUTH/INFO/SLOWLOG/COMMAND/SELECT 等 |
 | 5.13 | 多 DB 服务器 | `server.go` | ~250 | 多数据库管理、`atomic.Value` 无锁 FLUSHDB |
@@ -217,73 +221,56 @@ godis/
 
 ---
 
-## 第六阶段：持久化层 (aof/)
-
-> 数据不丢失的保障。
-> 预计 1-2 天
-
-| 序号 | 模块 | 文件 | 行数 | 学习目标 |
-|------|------|------|------|----------|
-| 6.1 | AOF | `aof.go` | ~320 | 命令写入 channel → 批量刷盘，Fsync 策略 (Always/EverySec/No) |
-| 6.2 | AOF 重写 | `rewrite.go` | ~250 | BGREWRITEAOF：遍历数据库生成精简 AOF |
-| 6.3 | 序列化 | `marshal.go` | ~80 | CmdLine → RESP 格式 |
-| 6.4 | RDB | `rdb.go` | ~200 | RDB 快照保存/加载 |
-
----
-
-## 第七阶段：发布订阅 (pubsub/)
-
-> 消息通信机制。
-> 预计 < 1 天
-
-| 序号 | 模块 | 文件 | 行数 | 学习目标 |
-|------|------|------|------|----------|
-| 7.1 | 发布订阅 | `hub.go`, `pubsub.go` | ~200 | channel → 订阅者列表映射，连接关闭时清理 |
-
----
-
-## 第八阶段：主从复制 (database/replication_*.go)
-
-> 数据高可用的基础。
-> 预计 1-2 天
-
-| 序号 | 模块 | 文件 | 行数 | 学习目标 |
-|------|------|------|------|----------|
-| 8.1 | Master | `replication_master.go` | ~250 | 管理 slave、PSYNC 增量同步、命令传播 |
-| 8.2 | Slave | `replication_slave.go` | ~300 | 连接 master、全量/增量同步、命令回放 |
-
-**注意**: 主从复制依赖 `redis/client` (3.5) 和 `aof` (第六阶段)，建议先完成前置内容。
-
----
-
-## 第九阶段：集群层 (cluster/) 最高级
+## 第六阶段：集群层 (cluster/)
 
 > 分布式系统的精华，涉及共识算法、分布式事务。
+> 涉及 lib/: `lib/consistenthash`（一致性哈希）、`lib/pool`（连接池）、`lib/idgenerator`（Snowflake ID）
 > 预计 3-5 天
 
 | 序号 | 模块 | 文件 | 行数 | 学习目标 |
 |------|------|------|------|----------|
-| 9.1 | 集群入口 | `cluster.go` | 40 | `Cluster` 结构体 — 实现 `DBEngine` 接口 |
-| 9.2 | Raft 共识 | `raft/raft.go`, `fsm.go`, `utils.go` | ~300 | HashiCorp Raft 库使用、FSM 实现、集群元数据一致性 |
-| 9.3 | 集群核心 | `core/*.go` | ~800 | 节点管理、slot 分配、数据迁移、定时任务 |
-| 9.4 | TCC 分布式事务 | `core/tcc.go` | ~160 | Try-Commit-Catch 模式 — 跨节点原子操作 |
-| 9.5 | 跨节点命令 | `commands/*.go` | ~500 | 分布式 DEL/MSET/RENAME 及默认命令路由 |
+| 6.1 | 集群入口 | `cluster.go` | 40 | `Cluster` 结构体 — 实现 `DBEngine` 接口 |
+| 6.2 | Raft 共识 | `raft/raft.go`, `fsm.go`, `utils.go` | ~300 | HashiCorp Raft 库使用、FSM 实现、集群元数据一致性 |
+| 6.3 | 集群核心 | `core/*.go` | ~800 | 节点管理、slot 分配、数据迁移、定时任务 |
+| 6.4 | TCC 分布式事务 | `core/tcc.go` | ~160 | Try-Commit-Catch 模式 — 跨节点原子操作 |
+| 6.5 | 跨节点命令 | `commands/*.go` | ~500 | 分布式 DEL/MSET/RENAME 及默认命令路由 |
 
-**前置知识**: 需要理解一致性哈希 (1.6)、redis/client (3.5)、并行内核 (5.3)、事务 (5.11)。
+**涉及的 lib/ 模块**（按需学习）:
+
+| 模块 | 文件 | 行数 | 学习目标 | 在哪里用到 |
+|------|------|------|----------|-----------|
+| `lib/consistenthash` | `consistenthash.go` | ~120 | 一致性哈希，虚拟节点 | `cluster/` 中 slot 映射 |
+| `lib/pool` | `pool.go` | ~100 | 连接池/对象池 | `redis/client/` 中连接管理 |
+| `lib/idgenerator` | `snowflake.go` | ~80 | Snowflake 唯一 ID | `cluster/` 中分布式 ID |
 
 ---
 
-## 第十阶段：入口与配置
+## 第七阶段：持久化 + 发布订阅 + 主从复制
 
-> 串联全局。
+> 数据可靠性保障和消息通信。
+> 预计 2-3 天
+
+| 序号 | 模块 | 文件 | 行数 | 学习目标 |
+|------|------|------|------|----------|
+| 7.1 | AOF | `aof/aof.go` | ~320 | 命令写入 channel → 批量刷盘，Fsync 策略 |
+| 7.2 | AOF 重写 | `aof/rewrite.go` | ~250 | BGREWRITEAOF：遍历数据库生成精简 AOF |
+| 7.3 | 序列化 | `aof/marshal.go` | ~80 | CmdLine → RESP 格式 |
+| 7.4 | RDB | `aof/rdb.go` | ~200 | RDB 快照保存/加载 |
+| 7.5 | 发布订阅 | `pubsub/hub.go`, `pubsub.go` | ~200 | channel → 订阅者列表映射 |
+| 7.6 | 主节点复制 | `database/replication_master.go` | ~250 | 管理 slave、PSYNC 增量同步、命令传播 |
+| 7.7 | 从节点复制 | `database/replication_slave.go` | ~300 | 连接 master、全量/增量同步、命令回放 |
+
+---
+
+## 第八阶段：入口与配置
+
+> 串联全局。验证是否真正理解了整个项目。
 > 预计 < 1 天
 
 | 序号 | 模块 | 文件 | 行数 | 学习目标 |
 |------|------|------|------|----------|
-| 10.1 | 入口 | `main.go` | 76 | 程序启动全流程：配置 → 日志 → 选择模式 (单机/集群/gnet) → 启动 |
-| 10.2 | 配置 | `config/config.go` | 184 | 配置文件解析、默认值 |
-
-**建议**: 这个阶段可以最先看也可以最后看。先看可以建立全局视野，最后看可以验证是否真正理解了整个项目。
+| 8.1 | 入口 | `main.go` | 76 | 程序启动全流程：配置 → 日志 → 选择模式 (单机/集群/gnet) → 启动 |
+| 8.2 | 配置 | `config/config.go` | 184 | 配置文件解析、默认值 |
 
 ---
 
@@ -301,7 +288,7 @@ godis/
 
 ## 学习建议
 
-- **先全局后局部**: 先读 `main.go` (10.1) 建立全局视野，再按阶段深入
+- **先全局后局部**: 先读 `main.go` 建立全局视野，再按阶段深入
 - **边读边跑**: 用 `redis-cli -p 6399` 连接 godis，发命令，跟调试器走链路
 - **先单机后集群**: 关闭集群模式 (`cluster-enable no`) 吃透单机版
 - **以命令为线索**: 选一个命令 (如 SET)，从 `main.go` → `Exec` → `string.go:execSet` 画完整链路
@@ -314,21 +301,12 @@ godis/
 
 | 阶段 | 模块 | 状态 | 笔记 |
 |------|------|------|------|
-| 1.1 | lib/sync/wait + lib/sync/atomic | ✅ 已完成 | [01-lib-sync-wait.md](01-lib-sync-wait.md) |
-| 1.2 | lib/logger | ✅ 已完成 | [02-lib-logger.md](02-lib-logger.md) |
-| 1.3 | lib/utils | ⏳ 待学习 | |
-| 1.4 | lib/timewheel | ⏳ 待学习 | |
-| 1.5 | lib/consistenthash | ⏳ 待学习 | |
-| 1.6 | lib/wildcard | ⏳ 待学习 | |
-| 1.7 | lib/geohash | ⏳ 待学习 | |
-| 1.8 | lib/pool | ⏳ 待学习 | |
-| 1.9 | lib/idgenerator | ⏳ 待学习 | |
-| 2.1-2.3 | interface/* | ⏳ 待学习 | |
-| 3.1-3.7 | tcp/ + redis/* | ⏳ 待学习 | |
+| 2.x | lib/sync/wait + lib/sync/atomic + lib/logger | ✅ 已完成 | [01-lib-sync-wait.md](01-lib-sync-wait.md), [02-lib-logger.md](02-lib-logger.md) |
+| 1.1-1.3 | interface/* | ✅ 已完成 | [03-interface.md](03-interface.md) |
+| 2.1-2.2 | tcp/* | ✅ 已完成 | [04-tcp-server.md](04-tcp-server.md) |
+| 3.1-3.6 | redis/* | ✅ 已完成 | [05-redis-protocol.md](05-redis-protocol.md) |
 | 4.1-4.6 | datastruct/* | ⏳ 待学习 | |
 | 5.1-5.15 | database/* | ⏳ 待学习 | |
-| 6.1-6.4 | aof/* | ⏳ 待学习 | |
-| 7.1 | pubsub/* | ⏳ 待学习 | |
-| 8.1-8.2 | replication | ⏳ 待学习 | |
-| 9.1-9.5 | cluster/* | ⏳ 待学习 | |
-| 10.1-10.2 | main + config | ⏳ 待学习 | |
+| 6.1-6.5 | cluster/* | ⏳ 待学习 | |
+| 7.1-7.7 | aof + pubsub + replication | ⏳ 待学习 | |
+| 8.1-8.2 | main + config | ⏳ 待学习 | |
