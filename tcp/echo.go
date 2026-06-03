@@ -7,13 +7,14 @@ package tcp
 import (
 	"bufio"
 	"context"
-	"github.com/hdt3213/godis/lib/logger"
-	"github.com/hdt3213/godis/lib/sync/atomic"
-	"github.com/hdt3213/godis/lib/sync/wait"
 	"io"
 	"net"
 	"sync"
 	"time"
+
+	"github.com/hdt3213/godis/lib/logger"
+	"github.com/hdt3213/godis/lib/sync/atomic"
+	"github.com/hdt3213/godis/lib/sync/wait"
 )
 
 // EchoHandler echos received line to client, using for test
